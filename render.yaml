@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: gymapp
+    env: node
+    buildCommand: cd frontend && npm install && npm run build && cp -r build ../backend/ && cd ../backend && npm install
+    startCommand: cd backend && node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_PASSWORD
+        value: hegelmann2025
+      - key: DB_PATH
+        value: /opt/render/project/data/gym.db
