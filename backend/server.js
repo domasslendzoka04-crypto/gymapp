@@ -4,23 +4,31 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'gymapp-secret-change-this';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'hegelmann2025';
-const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data', 'workouts.json');
 
-const dataDir = path.dirname(DATA_FILE);
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, '{}');
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
-function readData() {
-  try { return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); }
-  catch { return {}; }
-}
-function writeData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS workouts (
+      date TEXT PRIMARY KEY,
+      data JSONB NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS day_types (
+      date TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
 }
 
 app.use(cors());
@@ -50,22 +58,60 @@ app.post('/api/login', (req, res) => {
   res.json({ token });
 });
 
-app.get('/api/workouts', auth, (req, res) => {
-  res.json(readData());
+app.get('/api/workouts', auth, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT date, data FROM workouts ORDER BY date');
+    const workouts = {};
+    result.rows.forEach(r => { workouts[r.date] = r.data; });
+    res.json(workouts);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-app.put('/api/workouts/:date', auth, (req, res) => {
-  const data = readData();
-  data[req.params.date] = req.body;
-  writeData(data);
-  res.json({ ok: true });
+app.put('/api/workouts/:date', auth, async (req, res) => {
+  try {
+    await pool.query(`
+      INSERT INTO workouts (date, data, updated_at) VALUES ($1, $2, NOW())
+      ON CONFLICT (date) DO UPDATE SET data = $2, updated_at = NOW()
+    `, [req.params.date, req.body]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-app.delete('/api/workouts/:date', auth, (req, res) => {
-  const data = readData();
-  delete data[req.params.date];
-  writeData(data);
-  res.json({ ok: true });
+app.delete('/api/workouts/:date', auth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM workouts WHERE date = $1', [req.params.date]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/daytypes', auth, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT date, type FROM day_types');
+    const types = {};
+    result.rows.forEach(r => { types[r.date] = r.type; });
+    res.json(types);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/daytypes/:date', auth, async (req, res) => {
+  try {
+    const { type } = req.body;
+    await pool.query(`
+      INSERT INTO day_types (date, type, updated_at) VALUES ($1, $2, NOW())
+      ON CONFLICT (date) DO UPDATE SET type = $2, updated_at = NOW()
+    `, [req.params.date, type]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('*', (req, res) => {
@@ -76,4 +122,9 @@ app.get('*', (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+initDB().then(() => {
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+}).catch(e => {
+  console.error('DB init failed:', e);
+  process.exit(1);
+});
