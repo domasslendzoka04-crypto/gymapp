@@ -1,7 +1,5 @@
 require('dotenv').config();
 const express = require('express');
-const Database = require('better-sqlite3');
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const path = require('path');
@@ -11,32 +9,28 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'gymapp-secret-change-this';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'hegelmann2025';
+const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data', 'workouts.json');
 
-// DB setup
-const dbPath = process.env.DB_PATH || path.join(__dirname, 'data', 'gym.db');
-const dbDir = path.dirname(dbPath);
-if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+const dataDir = path.dirname(DATA_FILE);
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, '{}');
 
-const db = new Database(dbPath);
-db.exec(`
-  CREATE TABLE IF NOT EXISTS workouts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT UNIQUE NOT NULL,
-    data TEXT NOT NULL,
-    updated_at TEXT DEFAULT (datetime('now'))
-  );
-`);
+function readData() {
+  try { return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function writeData(data) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
 
 app.use(cors());
 app.use(express.json());
 
-// Serve frontend in production
-const frontendBuild = path.join(__dirname, '..', 'frontend', 'build');
+const frontendBuild = path.join(__dirname, 'build');
 if (fs.existsSync(frontendBuild)) {
   app.use(express.static(frontendBuild));
 }
 
-// Auth middleware
 function auth(req, res, next) {
   const h = req.headers.authorization;
   if (!h || !h.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
@@ -48,7 +42,6 @@ function auth(req, res, next) {
   }
 }
 
-// Login
 app.post('/api/login', (req, res) => {
   const { password } = req.body;
   if (!password) return res.status(400).json({ error: 'Password required' });
@@ -57,39 +50,24 @@ app.post('/api/login', (req, res) => {
   res.json({ token });
 });
 
-// Get all workouts
 app.get('/api/workouts', auth, (req, res) => {
-  const rows = db.prepare('SELECT date, data, updated_at FROM workouts ORDER BY date').all();
-  const result = {};
-  rows.forEach(r => { result[r.date] = JSON.parse(r.data); });
-  res.json(result);
+  res.json(readData());
 });
 
-// Get single workout
-app.get('/api/workouts/:date', auth, (req, res) => {
-  const row = db.prepare('SELECT data FROM workouts WHERE date = ?').get(req.params.date);
-  if (!row) return res.status(404).json({ error: 'Not found' });
-  res.json(JSON.parse(row.data));
-});
-
-// Save workout
 app.put('/api/workouts/:date', auth, (req, res) => {
-  const { date } = req.params;
-  const data = JSON.stringify(req.body);
-  db.prepare(`
-    INSERT INTO workouts (date, data, updated_at) VALUES (?, ?, datetime('now'))
-    ON CONFLICT(date) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
-  `).run(date, data);
+  const data = readData();
+  data[req.params.date] = req.body;
+  writeData(data);
   res.json({ ok: true });
 });
 
-// Delete workout
 app.delete('/api/workouts/:date', auth, (req, res) => {
-  db.prepare('DELETE FROM workouts WHERE date = ?').run(req.params.date);
+  const data = readData();
+  delete data[req.params.date];
+  writeData(data);
   res.json({ ok: true });
 });
 
-// Fallback to frontend
 app.get('*', (req, res) => {
   if (fs.existsSync(frontendBuild)) {
     res.sendFile(path.join(frontendBuild, 'index.html'));
