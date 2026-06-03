@@ -11,5 +11,5 @@ services:
         generateValue: true
       - key: ADMIN_PASSWORD
         value: hegelmann2025
-      - key: DB_PATH
-        value: /opt/render/project/data/gym.db
+      - key: DATA_FILE
+        value: /opt/render/project/src/backend/data/workouts.json
